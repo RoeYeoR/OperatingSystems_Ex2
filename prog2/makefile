@@ -3,11 +3,11 @@ CXXFLAGS = -Wall -std=c++11
 
 all: mync
 
-mync:mync1.o
-	$(CXX) $(CXXFLAGS) -o mync mync1.o
+mync:mync.o
+	$(CXX) $(CXXFLAGS) -o mync mync.o
 
-mync.o:mync1.cpp
-	$(CXX) $(CXXFLAGS) -c mync1.cpp 
+mync.o:mync.cpp
+	$(CXX) $(CXXFLAGS) -c mync.cpp 
 
 
 clean:
