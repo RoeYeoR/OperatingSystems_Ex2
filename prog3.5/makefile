@@ -1,13 +1,25 @@
 CXX = g++
 CXXFLAGS = -Wall -std=c++11
+COVFLAGS = -fprofile-arcs -ftest-coverage
 
-all: mync_3.5
+TARGET = mync
 
-mync_3.5: mync.o
-	$(CXX) $(CXXFLAGS) -o mync_3.5 mync.o
+.PHONY: all clean coverage
 
-mync.o: mync.cpp
-	$(CXX) $(CXXFLAGS) -c mync.cpp
+all: $(TARGET)
+
+$(TARGET): mync.o
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -o $@ $^
+
+mync.o: mync.cpp 
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -c $< -o $@
+
+coverage: $(TARGET)
+	./$(TARGET)
+	gcov mync.cpp
 
 clean:
-	rm -f mync_3.5 *.o
+	rm -f *.o $(TARGET) *.gcno *.gcda *.gcov
+
+
+

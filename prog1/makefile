@@ -1,13 +1,21 @@
-CXX = g++
-CXXFLAGS = -Wall -std=c++11
+CC = g++
+CFLAGS = -Wall -Wextra -Werror -std=c++11 -O2
+COVFLAGS = -fprofile-arcs -ftest-coverage
+TARGET = ttt
 
-all: ttt
+.PHONY: all clean coverage
 
-ttt: TicTacToe.o
-	$(CXX) $(CXXFLAGS) -o ttt TicTacToe.o
+all: $(TARGET)
 
-TicTacToe.o: TicTacToe.cpp TicTacToe.hpp
-	$(CXX) $(CXXFLAGS) -c TicTacToe.cpp
+$(TARGET): ttt.o
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $^
+
+ttt.o: ttt.cpp ttt.hpp
+	$(CC) $(CFLAGS) $(COVFLAGS) -c ttt.cpp	
+
+coverage: $(TARGET)
+	
+	gcov ttt.cpp
 
 clean:
-	rm -f *.o ttt 
+	rm -f $(TARGET) *.gcno *.gcda *.gcov *.o

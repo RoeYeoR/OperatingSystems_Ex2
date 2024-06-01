@@ -1,248 +1,517 @@
 #include <iostream>
-#include <string>
 #include <vector>
-#include <sstream>
 #include <cstring>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <unistd.h>
 #include <netdb.h>
+#include <sstream>
+#include <csignal>
+#include <sys/wait.h>
+#include <getopt.h>
+#include <sys/types.h>
 #include <arpa/inet.h>
+#include <ctime>
 #include <signal.h>
 
-// Global variable to store the timeout value
-int timeout = 0;
+using namespace std;
 
-// Signal handler for alarm
-void alarmHandler(int signal) {
-    std::cerr << "Timeout reached. Killing processes..." << std::endl;
-    exit(0);
+
+
+int timeout = -1;
+bool run =true;
+
+
+
+void client_input(int c_sock)
+{
+dup2(c_sock, STDIN_FILENO);
 }
 
-void executeProgram(const std::string& command, int inputFd, int outputFd) {
-    std::istringstream iss(command);
-    std::string token;
-    std::vector<std::string> tokens;
 
-    while (iss >> token) {
-        tokens.push_back(token);
-    }
+void client_output(int c_sock)
+{
+dup2(c_sock, STDOUT_FILENO);
+dup2(c_sock, STDERR_FILENO); 
+}
 
-    std::vector<char*> args;
-    for (const std::string& s : tokens) {
-        char* arg = new char[s.size() + 1];
-        std::copy(s.begin(), s.end(), arg);
-        arg[s.size()] = '\0';
-        args.push_back(arg);
-    }
-    args.push_back(nullptr);
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        if (inputFd != -1) {
-            dup2(inputFd, STDIN_FILENO);
-            close(inputFd);
+int TCPServer(const string &port)
+{
+int s_sock = socket(AF_INET, SOCK_STREAM, 0);
+if (s_sock < 0)
+{
+perror("failed to create socket..");
+exit(EXIT_FAILURE);
+}
+
+int opt = 1;
+if (setsockopt(s_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+{
+perror("failed to set socket options");
+close(s_sock);
+exit(EXIT_FAILURE);
+}
+
+struct sockaddr_in server_addr = {};
+server_addr.sin_family = AF_INET;
+server_addr.sin_port = htons(stoi(port));
+server_addr.sin_addr.s_addr = INADDR_ANY;
+
+if (bind(s_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+{
+perror("failed to bind a socket..");
+close(s_sock);
+exit(EXIT_FAILURE);
+}
+
+if (listen(s_sock, 1) < 0)
+{
+perror("failed to listen on a socket..");
+close(s_sock);
+exit(EXIT_FAILURE);
+}
+
+return s_sock;
+}
+
+int UDPClient(const string &hostname, const string &port, struct sockaddr_in &server_addr)
+{
+int c_sock = socket(AF_INET, SOCK_DGRAM, 0);
+if (c_sock < 0)
+{
+perror("failed to create a socket..");
+exit(EXIT_FAILURE);
+}
+
+struct hostent *server = gethostbyname(hostname.c_str());
+if (server == nullptr)
+{
+cerr << "Error: No such host" << endl;
+close(c_sock);
+exit(EXIT_FAILURE);
+}
+
+server_addr.sin_family = AF_INET;
+server_addr.sin_port = htons(stoi(port));
+memcpy(&server_addr.sin_addr.s_addr, server->h_addr, server->h_length);
+
+return c_sock;
+}
+
+int UDPSserver(const string &port)
+{
+int s_sock = socket(AF_INET, SOCK_DGRAM, 0);
+if (s_sock < 0)
+{
+perror("failed to create a socket..");
+exit(EXIT_FAILURE);
+}
+
+struct sockaddr_in server_addr = {};
+server_addr.sin_family = AF_INET;
+server_addr.sin_port = htons(stoi(port));
+server_addr.sin_addr.s_addr = INADDR_ANY;
+
+if (bind(s_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+{
+perror("failed to bind a socket..");
+close(s_sock);
+exit(EXIT_FAILURE);
+}
+
+return s_sock;
+}
+
+
+int TCPClient(const string &hostname, const string &port)
+{
+int c_sock = socket(AF_INET, SOCK_STREAM, 0);
+if (c_sock < 0)
+{
+perror("failed to create a socket..");
+exit(EXIT_FAILURE);
+}
+
+struct hostent *server = gethostbyname(hostname.c_str());
+if (server == nullptr)
+{
+cerr << "Error: No such host" << endl;
+close(c_sock);
+exit(EXIT_FAILURE);
+}
+
+struct sockaddr_in server_addr = {};
+server_addr.sin_family = AF_INET;
+server_addr.sin_port = htons(stoi(port));
+memcpy(&server_addr.sin_addr.s_addr, server->h_addr, server->h_length);
+cout << "Connecting to " << hostname << " on port " << port << endl;
+if (connect(c_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+{
+perror("failed to connect to server..");
+close(c_sock);
+exit(EXIT_FAILURE);
+}
+cout << "Connected to server..." << endl;
+return c_sock;
+}
+
+
+void alarm(int s)
+{
+if (s == SIGALRM)
+{
+run = false;
+}
+}
+
+
+void signal(int s)
+{
+if (s == SIGINT)
+{
+run = false;
+}
+}
+
+vector<string> seperate(const string &str)
+{
+vector<string> result;
+istringstream iss(str);
+for (string s; iss >> s;)
+{
+result.push_back(s);
+}
+return result;
+}
+
+
+int main(int argc, char *argv[])
+{
+signal(SIGINT, signal); 
+signal(SIGALRM, alarm); 
+
+int opt;
+char *program = nullptr;
+string input_redirect, output_redirect;
+
+
+while ((opt = getopt(argc, argv, "e:i:o:b:t:")) != -1)
+{
+switch (opt)
+{
+    case 'e':
+        program = optarg;
+        break;
+    case 'i':
+        input_redirect = optarg;
+        break;
+    case 'o':
+        output_redirect = optarg;
+        if (!program)
+        {
+            input_redirect = optarg;
         }
-        if (outputFd != -1) {
-            dup2(outputFd, STDOUT_FILENO);
-            close(outputFd);
-        }
-
-        execvp(args[0], args.data());
-        perror("execvp failed..");
-        exit(1);
-    } else if (pid > 0) {
-        int status;
-        waitpid(pid, &status, 0);
-        if (WIFEXITED(status)) {
-            int exit_status = WEXITSTATUS(status);
-            std::cout << "Program exited with status: " << exit_status << std::endl;
-        }
-    } else {
-        perror("fork failed..");
-        exit(1);
-    }
-
-    for (char* arg : args) {
-        delete[] arg;
-    }
+        break;
+    case 'b':
+        input_redirect = optarg;
+        output_redirect = optarg;
+        break;
+    case 't':
+        timeout = stoi(optarg);
+        break;
+    default:
+        cerr << "Usage: " << argv[0]
+                << " -e <program> [args] [-i <input_redirect>] [-o <output_redirect>] [-b <bi_redirect>] [-t <timeout>]" << endl;
+        return EXIT_FAILURE;
+}
 }
 
-int createTCPServer(int port) {
-    int serverFd = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverFd == -1) {
-        perror("socket failed..");
-        exit(1);
-    }
-
-    sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(port);
-
-    if (bind(serverFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1) {
-        perror("bind failed..");
-        close(serverFd);
-        exit(1);
-    }
-
-    if (listen(serverFd, 1) == -1) {
-        perror("listen failed..");
-        close(serverFd);
-        exit(1);
-    }
-
-    int clientFd = accept(serverFd, NULL, NULL);
-    if (clientFd == -1) {
-        perror("accept failed..");
-        close(serverFd);
-        exit(1);
-    }
-
-    close(serverFd);
-    return clientFd;
+if (timeout > 0)
+{
+alarm(timeout);
 }
 
-int createTCPClient(const std::string& hostname, int port) {
-    int clientFd = socket(AF_INET, SOCK_STREAM, 0);
-    if (clientFd == -1) {
-        perror("socket failed..");
-        exit(1);
-    }
+if (program)
+{ 
+cout << "input: " << input_redirect << endl;
+cout << "output: " << output_redirect << endl;
 
-    hostent* server = gethostbyname(hostname.c_str());
-    if (!server) {
-        std::cerr << "Error: no such host\n";
-        close(clientFd);
-        exit(1);
-    }
 
-    sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    memcpy(&serverAddr.sin_addr.s_addr, server->h_addr, server->h_length);
-    serverAddr.sin_port = htons(port);
+string program_str = "./" + string(program);
 
-    if (connect(clientFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1) {
-        perror("connect failed..");
-        close(clientFd);
-        exit(1);
-    }
+vector<string> split_program = seperate(program_str); 
+vector<char *> args;                               
+for (const auto &arg : split_program)
+{ 
+    args.push_back(const_cast<char *>(arg.c_str()));
+}
+args.push_back(NULL);
 
-    return clientFd;
+pid_t pid = fork();
+if (pid < 0)
+{
+    perror("failed to fork a process.."); 
+    return EXIT_FAILURE;
 }
 
-int createUDPServer(int port) {
-    int serverFd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (serverFd == -1) {
-        perror("socket failed..");
-        exit(1);
-    }
-
-    sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(port);
-
-    if (bind(serverFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1) {
-        perror("bind failed..");
-        close(serverFd);
-        exit(1);
-    }
-
-    return serverFd;
-}
-
-int createUDPClient(const std::string& hostname, int port) {
-       int clientFd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (clientFd == -1) {
-        perror("socket failed..");
-        exit(1);
-    }
-
-    hostent* server = gethostbyname(hostname.c_str());
-    if (!server) {
-        std::cerr << "Error: no such host\n";
-        close(clientFd);
-        exit(1);
-    }
-
-    sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    memcpy(&serverAddr.sin_addr.s_addr, server->h_addr, server->h_length);
-    serverAddr.sin_port = htons(port);
-
-    // No need to bind for UDP client
-
-    return clientFd;
-}
-
-void handleTimeout(int seconds) {
-    if (seconds > 0) {
-        timeout = seconds;
-        alarm(seconds);
-    } else {
-        timeout = 0;
-    }
-}
-
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::cerr << "Usage: mync \"ttt + (9 different digits as argument)\" [options]\n";
-        return 1;
-    }
-
-    std::string command;
-    int inputFd = -1;
-    int outputFd = -1;
-
-    // Process command-line arguments
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "-i" || arg == "-o" || arg == "-b") {
-            // Handle input/output redirection
-            // ...
-        } else if (arg.find("UDPS") == 0) {
-            // Start UDP server
-            // ...
-        } else if (arg.find("UDPC") == 0) {
-            // Start UDP client
-            // ...
-        } else if (arg == "-t") {
-            // Timeout parameter
-            if (i + 1 < argc) {
-                int timeoutValue = std::stoi(argv[++i]);
-                handleTimeout(timeoutValue);
-            } else {
-                std::cerr << "Error: Timeout value missing\n";
-                return 1;
+if (pid == 0)
+{ 
+    if (!input_redirect.empty())
+    {
+        if (input_redirect.substr(0, 4) == "TCPS")
+        {
+            int port = stoi(input_redirect.substr(4));
+            int s_sock = TCPServer(to_string(port));
+            int c_sock = accept(s_sock, nullptr, nullptr);
+            if (c_sock < 0)
+            {
+                perror("failed to accepte a connection..");
+                close(s_sock);
+                return EXIT_FAILURE;
             }
-        } else {
-            command += arg;
-            command += " ";
+            client_input(c_sock);
+            if (input_redirect == output_redirect)
+            {
+                client_output(c_sock);
+            }
+            close(s_sock);
+        }
+        else if (input_redirect.substr(0, 4) == "UDPS")
+        {
+            int port = stoi(input_redirect.substr(4));
+            int s_sock = UDPSserver(to_string(port));
+            struct sockaddr_in client_addr = {};
+            socklen_t client_len = sizeof(client_addr);
+            char buffer[1024];
+            ssize_t n = recvfrom(s_sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &client_len);
+            if (n < 0)
+            {
+                perror("failed to receive a UDP message..");
+                close(s_sock);
+                return EXIT_FAILURE;
+            }
+            client_input(s_sock);
         }
     }
 
-    // Remove trailing space from command
-    if (!command.empty()) {
-        command.pop_back();
+    if (!output_redirect.empty() && output_redirect != input_redirect)
+    {
+        if (output_redirect.substr(0, 4) == "TCPS")
+        {
+            int port = stoi(output_redirect.substr(4));
+            int s_sock = TCPServer(to_string(port));
+            int c_sock = accept(s_sock, nullptr, nullptr);
+            if (c_sock < 0)
+            {
+                perror("failed to accept a connection..");
+                close(s_sock);
+                return EXIT_FAILURE;
+            }
+            client_output(c_sock);
+            close(s_sock);
+        }
+        else if (output_redirect.substr(0, 4) == "TCPC")
+        {
+            string host_port = output_redirect.substr(4);
+            size_t comma_pos = host_port.find(',');
+            if (comma_pos != string::npos)
+            {
+                string hostname = host_port.substr(0, comma_pos);
+                string port = host_port.substr(comma_pos + 1);
+                int c_sock = TCPClient(hostname, port);
+                client_output(c_sock);
+            }
+            else
+            {
+                cerr << "Invalid TCPC format. Expected TCPC<hostname,port>" << endl;
+                return EXIT_FAILURE;
+            }
+        }
+        else if (output_redirect.substr(0, 4) == "UDPC")
+        {
+            string host_port = output_redirect.substr(4);
+            size_t comma_pos = host_port.find(',');
+            if (comma_pos != string::npos)
+            {
+                string hostname = host_port.substr(0, comma_pos);
+                string port = host_port.substr(comma_pos + 1);
+                struct sockaddr_in server_addr;
+                int c_sock = UDPClient(hostname, port, server_addr);
+                client_output(c_sock);
+                char buffer[1024];
+                ssize_t n;
+                while ((n = read(STDIN_FILENO, buffer, sizeof(buffer) - 1)) > 0)
+                {
+                    buffer[n] = '\0';
+                    sendto(c_sock, buffer, n, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+                }
+                close(c_sock);
+            }
+            else
+            {
+                cerr << "Invalid UDPC format. Expected UDPC<hostname,port>" << endl;
+                return EXIT_FAILURE;
+            }
+        }
     }
 
-    // Execute the program
-    executeProgram(command, inputFd, outputFd);
+    
+    setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
 
-    if (inputFd != -1) {
-        close(inputFd);
+    
+    execvp(args[0], args.data());
+    
+    perror("failed to execute a program..");
+    return EXIT_FAILURE;
+}
+else
+{ 
+    int status;
+    while (run && waitpid(pid, &status, WNOHANG) == 0)
+    {
+        sleep(1);
     }
-    if (outputFd != -1 && outputFd != inputFd) {
-        close(outputFd);
+    if (!run)
+    {
+        kill(pid, SIGTERM);
     }
+}
+}
+else
+{ 
+if (!input_redirect.empty())
+{
 
-    return 0;
+    if (input_redirect.substr(0, 4) == "TCPS")
+    {
+
+        int port = stoi(input_redirect.substr(4));
+        int s_sock = TCPServer(to_string(port));
+        int c_sock = accept(s_sock, nullptr, nullptr);
+        if (c_sock < 0)
+        {
+            perror("failed to accept a connection..");
+            close(s_sock);
+            return EXIT_FAILURE;
+        }
+        cout << "The chosen port is: " << port << " and option " << argv[2] << endl;
+        cout << "Connected to client" << endl;
+        cout << "Enter message to send to client" << endl;
+        fd_set read_fds;
+        char buffer[1024];
+        ssize_t n;
+
+        while (run)
+        {
+            FD_ZERO(&read_fds);
+            FD_SET(c_sock, &read_fds);
+            FD_SET(STDIN_FILENO, &read_fds);
+
+            int max_fd = max(c_sock, STDIN_FILENO) + 1;
+            int activity = select(max_fd, &read_fds, nullptr, nullptr, nullptr);
+
+            if (activity < 0 && errno != EINTR)
+            {
+                perror("Error..");
+                break;
+            }
+
+            if (FD_ISSET(c_sock, &read_fds))
+            {
+                n = read(c_sock, buffer, sizeof(buffer) - 1);
+                if (n <= 0)
+                {
+                    break;
+                }
+                buffer[n] = '\0';
+                cout << buffer << flush;
+            }
+
+            if (FD_ISSET(STDIN_FILENO, &read_fds))
+            {
+                n = read(STDIN_FILENO, buffer, sizeof(buffer) - 1);
+                if (n <= 0)
+                {
+                    break;
+                }
+                buffer[n] = '\0';
+                write(c_sock, buffer, n);
+            }
+        }
+
+        close(c_sock);
+        close(s_sock);
+    }
+    else if (input_redirect.substr(0, 4) == "TCPC")
+    {
+        string host_port = input_redirect.substr(4);
+        size_t comma_pos = host_port.find(',');
+        if (comma_pos != string::npos)
+        {
+            string hostname = host_port.substr(0, comma_pos);
+            string port = host_port.substr(comma_pos + 1);
+            int c_sock = TCPClient(hostname, port);
+
+            fd_set read_fds;
+            char buffer[1024];
+            ssize_t n;
+
+            while (run)
+            {
+                FD_ZERO(&read_fds);
+                FD_SET(c_sock, &read_fds);
+                FD_SET(STDIN_FILENO, &read_fds);
+
+                int max_fd = max(c_sock, STDIN_FILENO) + 1;
+                int activity = select(max_fd, &read_fds, nullptr, nullptr, nullptr);
+
+                if (activity < 0 && errno != EINTR)
+                {
+                    perror("Error..");
+                    break;
+                }
+
+                if (FD_ISSET(c_sock, &read_fds))
+                {
+                    n = read(c_sock, buffer, sizeof(buffer) - 1);
+                    if (n <= 0)
+                    {
+                        break;
+                    }
+                    buffer[n] = '\0';
+                    cout << buffer << flush;
+                }
+
+                if (FD_ISSET(STDIN_FILENO, &read_fds))
+                {
+                    n = read(STDIN_FILENO, buffer, sizeof(buffer) - 1);
+                    if (n <= 0)
+                    {
+                        break;
+                    }
+                    buffer[n] = '\0';
+                    write(c_sock, buffer, n);
+                }
+            }
+
+            close(c_sock);
+        }
+        else
+        {
+            cerr << "Invalid TCPC format. Expected TCPC<hostname,port>" << endl;
+            return EXIT_FAILURE;
+        }
+    }
+}
+else
+{
+    cerr << "Usage: " << argv[0]
+            << " -e <program> [args] [-i <input_redirect>] [-o <output_redirect>] [-b <bi_redirect>] [-t <timeout>]" << endl;
+    return EXIT_FAILURE;
+}
+}
+
+return 0;
 }
 
