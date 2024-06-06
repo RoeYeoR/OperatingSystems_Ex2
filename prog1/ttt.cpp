@@ -39,10 +39,10 @@ while (true) {
         cout << "I Lost\n";
         break;
     }
-    if (isBoardFull()) {
-        cout << "DRAW\n";
-        break;
-    }
+    // if (isBoardFull()) {
+    //     cout << "DRAW\n";
+    //     break;
+    // }
 }
 }
 
