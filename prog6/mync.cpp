@@ -15,7 +15,145 @@
 #include <csignal>
 #include <sys/un.h>
 
-#define PATH "/tmp/newserver"
+#define UNIX_SOCKET_PATH "/tmp/new_server"
+
+//Function declarations
+void handle_redirection_e(int argc, char *argv[], const char *local_host, int &input_fd, int &output_fd, int &in_and_out_fd);
+void handle_redirection(int argc, char *argv[], const char *local_host, int &input_fd, int &output_fd, int &in_and_out_fd);
+void start_tcp_server(int port, int *fd);
+void start_tcp_client(const char *hostname, int port, int *fd);
+void start_udp_server(int port, int *fd);
+void start_udp_client(const char *hostname, int port, int *fd);
+int openUDSStreamServer(const char *path, int *fd);
+int openUDSStreamClient(const char *path, int *client_fd);
+int openUDSDatagramServer(const char *path, int *fd);
+int connectUDSDatagramClient(const char *path, int *fd);
+void transfer_data(int input_fd, int output_fd);
+void alarmHandler(int signum);
+
+
+
+int main(int argc, char *argv[])
+{
+    const char *local_host = "127.0.0.1"; // Localhost IP address
+    int input_fd = -1, output_fd = -1, in_and_out_fd = -1;
+
+    if (argc < 2)
+    {
+        std::cout << "Usage: " << argv[0] << " [-e command] [-i|-o|-b <TCPS|TCPC><port>]" << std::endl;
+        return 1;
+    }
+
+    // Check if the first argument is "-e"
+    bool execute_program = strcmp(argv[1], "-e") == 0;
+    if (execute_program && argc < 3)
+    {
+        std::cout << "Please provide the program name and its arguments after -e" << std::endl;
+        return 1;
+    }
+
+    if (execute_program)
+    {
+        // Split the second argument into program name and arguments
+        char *program = strtok(argv[2], " ");
+        char *arguments = strtok(NULL, "");
+        char *new_argv[] = {program, arguments, NULL};
+
+        // Handle input/output redirection
+        handle_redirection_e(argc, argv, local_host, input_fd, output_fd, in_and_out_fd);
+
+        // Fork the process to create a child process
+        pid_t pid = fork();
+
+        if (pid < 0)
+        {
+            perror("fork");
+            return 1;
+        }
+        else if (pid == 0)
+        {
+            // Child process
+            // Redirect standard input if input_fd is set
+            if (input_fd != -1)
+            {
+
+                dup2(input_fd, STDIN_FILENO);
+                close(input_fd);
+            }
+
+            // Redirect standard output if output_fd is set
+            if (output_fd != -1)
+            {
+                dup2(output_fd, STDOUT_FILENO);
+                close(output_fd);
+            }
+
+            // Redirect both standard input and output if in_and_out_fd is set
+            if (in_and_out_fd != -1)
+            {
+                dup2(in_and_out_fd, STDIN_FILENO);
+                dup2(in_and_out_fd, STDOUT_FILENO);
+                close(in_and_out_fd);
+            }
+            execvp(program, new_argv);
+
+            // If execvp returns, there was an error
+            perror("execvp");
+            return 1;
+        }
+        else
+        {
+            // Parent process
+            // Check if argv[5] == 't' and set an alarm for the time specified in argv[6]
+            if (argc > 5)
+            {
+
+                if (strcmp(argv[5], "-t") == 0)
+                {
+                    signal(SIGALRM, alarmHandler);
+                    int alarm_time = std::atoi(argv[6]);
+                    alarm(alarm_time);
+                }
+            }
+            int status;
+            waitpid(pid, &status, 0);
+        }
+    }
+    else
+    {
+        // Handle redirection
+        handle_redirection(argc, argv, local_host, input_fd, output_fd, in_and_out_fd);
+
+        if (argc == 3)
+        {
+
+            if (input_fd != -1)
+            {
+                transfer_data(input_fd, STDOUT_FILENO);
+                close(input_fd);
+            }
+
+            if (output_fd != -1)
+            {
+                transfer_data(STDIN_FILENO, output_fd);
+                close(output_fd);
+            }
+            if (in_and_out_fd != -1)
+            {
+                transfer_data(in_and_out_fd, in_and_out_fd);
+                close(in_and_out_fd);
+            }
+        }
+
+        else
+        {
+
+            transfer_data(input_fd, output_fd);
+        }
+    }
+
+    return 0;
+}
 
 // Open a TCP server on the specified port and accept a single connection
 void start_tcp_server(int port, int *fd)
@@ -413,11 +551,11 @@ void handle_redirection_e(int argc, char *argv[], const char *local_host, int &i
         }
         else if (strncmp(argv[4], "UDSSS", 5) == 0)
         {
-            openUDSStreamServer(PATH, &input_fd);
+            openUDSStreamServer(UNIX_SOCKET_PATH, &input_fd);
         }
         else if (strncmp(argv[4], "UDSSD", 5) == 0)
         {
-            openUDSDatagramServer(PATH, &input_fd);
+            openUDSDatagramServer(UNIX_SOCKET_PATH, &input_fd);
         }
 
         // if argc>5
@@ -443,7 +581,7 @@ void handle_redirection_e(int argc, char *argv[], const char *local_host, int &i
                 }
                 else if (strncmp(argv[6], "UDSCS", 5) == 0)
                 {
-                    openUDSStreamClient(PATH, &output_fd);
+                    openUDSStreamClient(UNIX_SOCKET_PATH, &output_fd);
                 }
             }
         }
@@ -469,11 +607,11 @@ void handle_redirection_e(int argc, char *argv[], const char *local_host, int &i
         }
         else if (strncmp(argv[4], "UDSCS", 5) == 0)
         {
-            openUDSStreamClient(PATH, &output_fd);
+            openUDSStreamClient(UNIX_SOCKET_PATH, &output_fd);
         }
         else if (strncmp(argv[4], "UDSCD", 5) == 0)
         {
-            connectUDSDatagramClient(PATH, &output_fd);
+            connectUDSDatagramClient(UNIX_SOCKET_PATH, &output_fd);
         }
     }
     else if (strncmp(argv[3], "-b", 2) == 0)
@@ -515,11 +653,11 @@ void handle_redirection(int argc, char *argv[], const char *local_host, int &inp
         }
          else if (strncmp(argv[2], "UDSSS", 5) == 0)
         {
-            openUDSStreamServer(PATH, &input_fd);
+            openUDSStreamServer(UNIX_SOCKET_PATH, &input_fd);
         }
         else if (strncmp(argv[2], "UDSSD", 5) == 0)
         {
-            openUDSDatagramServer(PATH, &input_fd);
+            openUDSDatagramServer(UNIX_SOCKET_PATH, &input_fd);
         }
 
         if (argc > 3)
@@ -566,11 +704,11 @@ void handle_redirection(int argc, char *argv[], const char *local_host, int &inp
         }
          else if (strncmp(argv[2], "UDSCS", 5) == 0)
         {
-            openUDSStreamClient(PATH, &output_fd);
+            openUDSStreamClient(UNIX_SOCKET_PATH, &output_fd);
         }
         else if (strncmp(argv[2], "UDSCD", 5) == 0)
         {
-            connectUDSDatagramClient(PATH, &output_fd);
+            connectUDSDatagramClient(UNIX_SOCKET_PATH, &output_fd);
         }
     }
     else if (strncmp(argv[1], "-b", 2) == 0)
@@ -584,135 +722,17 @@ void handle_redirection(int argc, char *argv[], const char *local_host, int &inp
             start_tcp_client(local_host, atoi(argv[2] + 14), &in_and_out_fd);
         }
     }
-}
 
+
+}
 // Signal handler for SIGALRM
 void alarmHandler(int signum)
 {
-    std::cout << "Alarm signal (" << signum << ") received. Terminating all specified processes.\n";
-    // Command to kill all processes. Adjust the command as needed.
-    system("pkill -9 ttt"); // Replace "ttt" with the actual name of the process to kill
+    std::cout << "Alarm signal (" << signum << ") received. Terminating processes.\n";
+    // Terminate all processes.
+    system("pkill -9 ttt"); 
     exit(signum);
 }
 
-int main(int argc, char *argv[])
-{
-    const char *local_host = "127.0.0.1"; // Localhost IP address
-    int input_fd = -1, output_fd = -1, in_and_out_fd = -1;
 
-    if (argc < 2)
-    {
-        std::cout << "Usage: " << argv[0] << " [-e command] [-i|-o|-b <TCPS|TCPC><port>]" << std::endl;
-        return 1;
-    }
 
-    // Check if the first argument is "-e"
-    bool execute_program = strcmp(argv[1], "-e") == 0;
-    if (execute_program && argc < 3)
-    {
-        std::cout << "Please provide the program name and its arguments after -e" << std::endl;
-        return 1;
-    }
-
-    if (execute_program)
-    {
-        // Split the second argument into program name and arguments
-        char *program = strtok(argv[2], " ");
-        char *arguments = strtok(NULL, "");
-        char *new_argv[] = {program, arguments, NULL};
-
-        // Handle input/output redirection
-        handle_redirection_e(argc, argv, local_host, input_fd, output_fd, in_and_out_fd);
-
-        // Fork the process to create a child process
-        pid_t pid = fork();
-
-        if (pid < 0)
-        {
-            perror("fork");
-            return 1;
-        }
-        else if (pid == 0)
-        {
-            // Child process
-            // Redirect standard input if input_fd is set
-            if (input_fd != -1)
-            {
-
-                dup2(input_fd, STDIN_FILENO);
-                close(input_fd);
-            }
-
-            // Redirect standard output if output_fd is set
-            if (output_fd != -1)
-            {
-                dup2(output_fd, STDOUT_FILENO);
-                close(output_fd);
-            }
-
-            // Redirect both standard input and output if in_and_out_fd is set
-            if (in_and_out_fd != -1)
-            {
-                dup2(in_and_out_fd, STDIN_FILENO);
-                dup2(in_and_out_fd, STDOUT_FILENO);
-                close(in_and_out_fd);
-            }
-            execvp(program, new_argv);
-
-            // If execvp returns, there was an error
-            perror("execvp");
-            return 1;
-        }
-        else
-        {
-            // Parent process
-            // Check if argv[5] == 't' and set an alarm for the time specified in argv[6]
-            if (argc > 5)
-            {
-
-                if (strcmp(argv[5], "-t") == 0)
-                {
-                    signal(SIGALRM, alarmHandler);
-                    int alarm_time = std::atoi(argv[6]);
-                    alarm(alarm_time);
-                }
-            }
-            int status;
-            waitpid(pid, &status, 0);
-        }
-    }
-    else
-    {
-        // Handle redirection
-        handle_redirection(argc, argv, local_host, input_fd, output_fd, in_and_out_fd);
-
-        if (argc == 3)
-        {
-
-            if (input_fd != -1)
-            {
-                transfer_data(input_fd, STDOUT_FILENO);
-                close(input_fd);
-            }
-
-            if (output_fd != -1)
-            {
-                transfer_data(STDIN_FILENO, output_fd);
-                close(output_fd);
-            }
-            if (in_and_out_fd != -1)
-            {
-                transfer_data(in_and_out_fd, in_and_out_fd);
-                close(in_and_out_fd);
-            }
-        }
-
-        else
-        {
-
-            transfer_data(input_fd, output_fd);
-        }
-    }
-
-    return 0;
-}

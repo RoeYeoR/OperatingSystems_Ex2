@@ -1,45 +1,54 @@
-#include <iostream>
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
-#include <cstring>
+#include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <iostream>
 #include <sys/types.h>
 #include <sys/wait.h>
 
-void startTCPServer(int port, int *fd);
-void startTCPClient(const char *hostname, int port, int *fd);
-void handleRedirection(int argc, char *argv[], const char *localhost, int &in_fd, int &out_fd, int &both_fd);
+// Function declarations
+void initialize_tcp_server(int port, int *server_fd);
+void initialize_tcp_client(const char *hostname, int port, int *client_fd);
+void configure_redirection(int argc, char *argv[], const char *localhost, int &input_fd, int &output_fd, int &both_fd);
 
 int main(int argc, char *argv[]) {
+    // Check if the correct number of arguments are provided and the -e flag is set
     if (argc < 3 || strcmp(argv[1], "-e") != 0) {
-        std::cerr << "Usage: " << argv[0] << " -e <program> [<options>]\n";
+        printf("Please enter the -e parameter, the program name, and the sequence of computer selections\n");
         return 1;
     }
 
+    // Split the second argument into program name and arguments
     char *program = strtok(argv[2], " ");
     char *arguments = strtok(NULL, "");
     char *new_argv[] = {program, arguments, NULL};
-    const char *localhost = "127.0.0.1";
+    const char *localhost = "127.0.0.1"; // Localhost IP address
 
-    int in_fd = -1, out_fd = -1, both_fd = -1;
+    int input_fd = -1, output_fd = -1, both_fd = -1;
 
-    handleRedirection(argc, argv, localhost, in_fd, out_fd, both_fd);
+    // Handle redirection
+    configure_redirection(argc, argv, localhost, input_fd, output_fd, both_fd);
 
+    // Fork the process to create a child process
     pid_t pid = fork();
 
     if (pid < 0) {
         perror("fork");
         return 1;
     } else if (pid == 0) {
-        if (in_fd != -1) {
-            dup2(in_fd, STDIN_FILENO);
-            close(in_fd);
+        // Child process
+        if (input_fd != -1) {
+            dup2(input_fd, STDIN_FILENO);
+            close(input_fd);
         }
-        if (out_fd != -1) {
-            dup2(out_fd, STDOUT_FILENO);
-            close(out_fd);
+        if (output_fd != -1) {
+            dup2(output_fd, STDOUT_FILENO);
+            close(output_fd);
         }
+
         if (both_fd != -1) {
             dup2(both_fd, STDIN_FILENO);
             dup2(both_fd, STDOUT_FILENO);
@@ -47,9 +56,12 @@ int main(int argc, char *argv[]) {
         }
 
         execvp(program, new_argv);
+
+        // If execvp returns, there was an error
         perror("execvp");
         return 1;
     } else {
+        // Parent process
         int status;
         waitpid(pid, &status, 0);
     }
@@ -57,83 +69,20 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-// Function to handle input and output redirection
-void handleRedirection(int argc, char *argv[], const char *localhost, int &in_fd, int &out_fd, int &both_fd) {
-
-    switch (argv[3][1]) {
-
-        case 'i':
-            if (argc == 5) {
-                switch (argv[4][3]) {
-                    case 'S':
-                        startTCPServer(atoi(argv[4] + 4), &in_fd);
-                        break;
-                    case 'C':
-                        startTCPClient(localhost, atoi(argv[4] + 4), &in_fd);
-                        break;
-                }
-            } else {
-                switch (argv[4][3]) {
-                    case 'S':
-                        startTCPServer(atoi(argv[4] + 4), &in_fd);
-                        break;
-                    case 'C':
-                        startTCPClient(localhost, atoi(argv[4] + 4), &in_fd);
-                        break;
-                }
-                switch (argv[5][1]) {
-                    case 'o':
-                        switch (argv[6][3]) {
-                            case 'C':
-                                startTCPClient(localhost, atoi(argv[6] + 4), &out_fd);
-                                break;
-                            case 'S':
-                                startTCPServer(atoi(argv[6] + 4), &out_fd);
-                                break;
-                        }
-                        break;
-                }
-            }
-            break;
-
-        case 'o':
-            switch (argv[4][3]) {
-                case 'S':
-                    startTCPServer(atoi(argv[4] + 4), &out_fd);
-                    break;
-                case 'C':
-                    startTCPClient(localhost, atoi(argv[4] + 4), &out_fd);
-                    break;
-            }
-            break;
-
-        case 'b':
-            switch (argv[4][3]) {
-                case 'S':
-                    startTCPServer(atoi(argv[4] + 4), &both_fd);
-                    break;
-                case 'C':
-                    startTCPClient(localhost, atoi(argv[4] + 4), &both_fd);
-                    break;
-            }
-            break;
-    }
-}
-
-// Function to start a TCP server and accept a single connection
-void startTCPServer(int port, int *fd) {
-
+// Initialize a TCP server on the specified port and accept a single connection
+void initialize_tcp_server(int port, int *server_fd) {
     int sockfd;
     struct sockaddr_in serv_addr, cli_addr;
     socklen_t clilen = sizeof(cli_addr);
 
+    // Create a socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
     if (sockfd < 0) {
         perror("socket");
         exit(1);
     }
 
+    // Initialize serv_addr structure
     bzero((char *)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
@@ -142,57 +91,104 @@ void startTCPServer(int port, int *fd) {
     int reuse = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
+    // Bind the socket to the specified port
     if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("bind");
         close(sockfd);
         exit(1);
     }
 
-    std::cout << "Listening for client on port: " << port << std::endl;
+    std::cout << "Waiting for client connection on port: " << port << std::endl;
+
+    // Listen for incoming connections
     listen(sockfd, 5);
 
-    *fd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
-
-    if (*fd < 0) {
+    // Accept a connection
+    *server_fd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
+    if (*server_fd < 0) {
         perror("accept");
         close(sockfd);
         exit(1);
     }
 
-    std::cout << "Connection established" << std::endl;
+    std::cout << "The connection was established successfully" << std::endl;
+
+    // Close the listening socket (not needed after accepting a connection)
     close(sockfd);
 }
 
-// Function to start a TCP client
-void startTCPClient(const char *hostname, int port, int *fd) {
+// Initialize a TCP client
+void initialize_tcp_client(const char *hostname, int port, int *client_fd) {
+    struct sockaddr_in serv_addr; 
+    struct hostent *server;      
 
-    struct sockaddr_in serv_addr;
-    struct hostent *server;
-
-    *fd = socket(AF_INET, SOCK_STREAM, 0);
-
-    if (*fd < 0) {
+    // Create a socket
+    *client_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (*client_fd < 0) {
         perror("socket");
         exit(1);
     }
 
+    // Get server information by hostname
     server = gethostbyname(hostname);
-
     if (server == NULL) {
         fprintf(stderr, "ERROR, no such host\n");
         exit(1);
     }
 
     bzero((char *)&serv_addr, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
-    serv_addr.sin_port = htons(port);
+    serv_addr.sin_family = AF_INET; // Set address family to IPv4
 
-    if (connect(*fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+    // Copy the server's IP address to the server address structure
+    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
+    serv_addr.sin_port = htons(port); // Convert port to network byte order and set it
+
+    // Attempt to connect to the server
+    if (connect(*client_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("connect");
-        close(*fd);
+        close(*client_fd);
         exit(1);
     }
 
-    std::cout << "Connected to server" << std::endl;
+    std::cout << "The connection was established successfully" << std::endl;
+}
+
+// Handle input/output redirection based on command-line arguments
+void configure_redirection(int argc, char *argv[], const char *localhost, int &input_fd, int &output_fd, int &both_fd) {
+    // Handle input redirection
+    if (strncmp(argv[3], "-i", 2) == 0) {
+        if (argc == 5) {
+            if (strncmp(argv[4], "TCPS", 4) == 0) {
+                initialize_tcp_server(atoi(argv[4] + 4), &input_fd);
+            } else if (strncmp(argv[4], "TCPC", 4) == 0) {
+                initialize_tcp_client(localhost, atoi(argv[4] + 14), &input_fd);
+            }
+        } else {
+            if (strncmp(argv[4], "TCPS", 4) == 0) {
+                initialize_tcp_server(atoi(argv[4] + 4), &input_fd);
+            } else if (strncmp(argv[4], "TCPC", 4) == 0) {
+                initialize_tcp_client(localhost, atoi(argv[4] + 14), &input_fd);
+            }
+
+            if (strncmp(argv[5], "-o", 2) == 0) {
+                if (strncmp(argv[6], "TCPC", 4) == 0) {
+                    initialize_tcp_client(localhost, atoi(argv[6] + 14), &output_fd);
+                } else if (strncmp(argv[6], "TCPS", 4) == 0) {
+                    initialize_tcp_server(atoi(argv[6] + 4), &output_fd);
+                }
+            }
+        }
+    } else if (strncmp(argv[3], "-o", 2) == 0) {
+        if (strncmp(argv[4], "TCPS", 4) == 0) {
+            initialize_tcp_server(atoi(argv[4] + 4), &output_fd);
+        } else if (strncmp(argv[4], "TCPC", 4) == 0) {
+            initialize_tcp_client(localhost, atoi(argv[4] + 14), &output_fd);
+        }
+    } else if (strncmp(argv[3], "-b", 2) == 0) {
+        if (strncmp(argv[4], "TCPS", 4) == 0) {
+            initialize_tcp_server(atoi(argv[4] + 4), &both_fd);
+        } else if (strncmp(argv[4], "TCPC", 4) == 0) {
+            initialize_tcp_client(localhost, atoi(argv[4] + 14), &both_fd);
+        }
+    }
 }
