@@ -114,7 +114,7 @@ nc -Uu "/tmp/new_server"
 #### Run 3:
 bash
 ```sh
-nc -lU "/tmp/new_server"
+nc -lU /tmp/new_server
 ./mync -e "./ttt 123456789" -o UDSCS
 
 ```
